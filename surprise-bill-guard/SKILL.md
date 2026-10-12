@@ -24,7 +24,11 @@ Run before every deploy, and after any change that adds an external API call, a 
 
    **A call is paid when it is a real client to a paid service.** Do not decide from a comment that says "paid". Look for the SDK import, the HTTP endpoint, or the env var name.
 
-   **A stub is not a paid call.** A function that returns fixed data is a stub. Say so, and note what it will become. If you cannot tell whether a call is real or a stub, label it **unclear** and say what is missing (for example, "the client module is not in the project").
+   **A stub is not a paid call.** A function is a stub when its body returns fixed data and makes no network call. Say so, and note what it will become. If you cannot tell whether a call is real or a stub, label it **unclear** and say what is missing (for example, "the client module is not in the project").
+
+   **A placeholder endpoint is not a live paid call.** A call whose host ends in `.example`, `.test`, or `example.com`, or that points at `localhost`, is a placeholder. Label it **unclear** and note the placeholder. Do not count it as current.
+
+   **A real call** uses a provider SDK, or an HTTP client aimed at a provider host, or reads a provider key from the environment.
 
 2. **Check each call site for these cost traps.**
 
@@ -49,7 +53,15 @@ Run before every deploy, and after any change that adds an external API call, a 
    | Duplicate triggers | Event handlers or webhooks that can fire twice and charge twice (no idempotency key) | All |
 
 3. **Decide whether each risk is current or latent.**
-   - **Current**: an entry point, route, scheduler, or `main` starts the code.
+   - **Current**: an entry point starts the code. Entry points, per stack:
+
+     | Stack | Entry point |
+     |---|---|
+     | Python | A `__main__` block, a `manage.py` command, a route registered in `urls.py` or an `app.route` decorator, or a scheduler call |
+     | Java | A `main` method, a `@Scheduled` method, or a `scheduleAtFixedRate` call reached from `main` |
+     | Node.js | The `start` script in `package.json`, or a `require` chain from the file it names |
+     | IBM ESQL | A flow whose input node connects to the node in question (check the `.msgflow` wiring) |
+     | Front end | A `<script>` tag or a page that loads the file |
    - **Latent**: nothing in the project starts it. Say what would start it.
    - **Unclear**: the wiring is missing from the project (for example, a view with no `urls.py`, or a job with no scheduler). Say which file is missing.
 
@@ -57,9 +69,21 @@ Run before every deploy, and after any change that adds an external API call, a 
 
    - **Calls per day**: for a timer, `86400 / interval_in_seconds` (a 500 ms timer is 172,800 calls per day per open page or process). For a loop with no exit, say "unbounded; grows until the process stops". For a loop over data, `items per run × runs per day`.
    - **Calls per month**: calls per day × 30.
+
+   **Default volumes when the project does not say.** State each default you use in the report.
+   - Users per day: 100 to 10,000 (report both ends).
+   - Browser page loads per day: 1 open page for a poll; 1,000 pages per day for a page-load call.
+   - Items per run for a loop over data: the row count if the project shows it; otherwise 1,000.
+   - Public endpoint requests per day: 100 to 10,000.
    - **Monthly cost**: `calls per month × unit price`. Use the provider's published price, and state the source and date. If you cannot find a price, write "unknown" in this column. Do not invent numbers. Give a range when traffic is unknown, for example "100 to 10,000 users per day".
 
 5. **Report.** Sort current risks by exposure. List latent and unclear items in their own table below, so they are not mixed in with live risks.
+
+   **Severity scale** (use it so the same project ranks the same way every time):
+   - **High**: current, and either unbounded, or more than 100,000 calls per month at the upper default volume.
+   - **Medium**: current, bounded, and more than 10,000 calls per month at the upper default volume.
+   - **Low**: current and under 10,000 calls per month at the upper default volume; or latent; or unclear.
+   - Raise a Latent item to High only if the report says the project wires it up (for example, a route is added or a scheduler is registered).
 
    | Risk | Status | Location | Trigger | Calls per day | Calls per month | Monthly cost | Fix |
    |---|---|---|---|---|---|---|---|

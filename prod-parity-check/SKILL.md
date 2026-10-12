@@ -17,6 +17,8 @@ Run before every deploy or release. It is most useful after the AI added new con
 
    If there is no manifest at all (no `package.json`, `requirements.txt`, `pom.xml`, `build.gradle`, or equivalent), say so and check only what the code itself shows.
 
+   If there is no deploy config at all, assume these production defaults and list each one in the report: the Dockerfile `CMD` if one exists; otherwise the `Procfile`; otherwise one process that listens on the `PORT` variable. Then run the checks against those assumptions.
+
 2. **Run the checks below.** Use search tools (grep or ripgrep) across the whole repo. Skip `node_modules`, `vendor`, `target`, `build`, `dist`, virtualenvs, and build output.
 
    **A. Checks for every stack**
@@ -43,6 +45,8 @@ Run before every deploy or release. It is most useful after the AI added new con
    | Static assets | Asset URLs or paths that only resolve in dev; no build step for CSS or JS bundles | Broken styles, scripts, or images |
    | Third-party sandboxes | Test keys, sandbox URLs, or test webhook secrets in production config | Payments or emails go nowhere |
    | `.dockerignore` | `COPY . .` with no `.dockerignore` that excludes `.env`, `.git`, key files, and local data | Secrets and local data end up in the image |
+   | EXPOSE and port | Dockerfile `EXPOSE` differs from the port the app listens on, or from the `PORT` variable | The platform routes traffic to a closed port |
+   | Ignore rules | `.gitignore` missing, or lacking env, key, keystore, and build folders | Secrets and build output get committed (see `leaked-key-finder`) |
 
    **B. Container build path (for any Dockerfile)**
 
@@ -64,16 +68,38 @@ Run before every deploy or release. It is most useful after the AI added new con
    | Java (JDBC) | Connection string | `jdbc:...://localhost` or a password in the query string (`?password=`) |
    | Node.js | Dev command | `npm run dev`, `nodemon`, `ts-node` in production `CMD`; `NODE_ENV=development` |
    | Front end (HTML, CSS, JS) | Client build | Dev server or unminified bundles deployed; `http://localhost` URLs in HTML, CSS (`url(...)`), or JS; `console.log` of user data or secrets; `eval(` on untrusted input; source maps published with secrets inside; `https` page loading `http` scripts or styles |
-   | IBM ESQL and App Connect | Deployment config | Broker or integration server properties pointing at a local MQ queue manager or database (`localhost`, `127.0.0.1`); flow properties with dev default values in `*.properties` override files; `DECLARE` with a dev URL instead of a property; missing overrides for production environment |
+   | IBM ESQL and App Connect | Deployment config | Broker or integration server properties pointing at a local MQ queue manager or database (`localhost`, `127.0.0.1`); flow properties with dev default values in `*.properties` override files; `DECLARE` with a dev URL instead of a property; missing overrides for production environment. **Override binding:** an override line such as `OrderFlow#geoUrl=...` applies only if the name after `#` matches a property the flow declares. An override that binds to nothing is a Warning ("override binds to nothing"), because production silently keeps the default. |
    | Serverless or PaaS | Fixed runtime | Writes to the local disk; long-running background threads or loops that the platform will kill; no `PORT` read |
 
    **D. Cross-references (do not repeat these here)**
-   - Hardcoded secrets, keys, and passwords: run `leaked-key-finder`.
-   - Loops, timers, retries, and public endpoints that call paid services: run `surprise-bill-guard`. Note in your report that they were referred there.
+   - Hardcoded secrets, keys, passwords, and secrets written to logs: run `leaked-key-finder`.
+   - Loops, timers, retries, and public endpoints that call paid services: run `surprise-bill-guard`.
+   - Failing unit tests: run `prove-it-works`.
+   - If a referred skill is not loaded in this environment, report "Cannot check: skill not loaded" against that item. Do not silently refer it.
 
-3. **Check the deploy path itself.** Confirm the Dockerfile or build script copies the files the app needs and does not copy secrets or `.env` files into the image. Confirm the start command matches what the app expects in production, and that each command it uses is declared in the manifest.
+3. **Assign a severity to every finding.** Use these defaults, so the same project gets the same ranking every time.
 
-4. **Find code that is never started.** For each route, job, or module that you flagged, check whether anything imports or starts it (an entry point, a URL config, a scheduler registration, a `main`). If nothing does, mark it **unwired** and say what would start it. Unwired code is not a production blocker by itself, but it can become one when someone wires it up.
+   | Severity | Checks that default to it |
+   |---|---|
+   | Blocker | Hardcoded production-breaking address (`localhost` DB or listen); `DEBUG` on in production; dev command in the production `CMD`; missing `WORKDIR` or dependency install in the Dockerfile; a `CMD` target that the image does not contain; a required env var read with no default; a live secret in client code (also refer to `leaked-key-finder`) |
+   | Warning | Missing `.dockerignore` or `.gitignore` coverage; no lockfile; unpinned dependencies; `eval()` on input; CORS `*`; outbound calls with no timeout; third-party scripts with no `integrity`; mixed content; port or `EXPOSE` mismatch; override that binds to nothing |
+   | Note | Floating image tags; unwired code (with the missing piece named); a default assumption that is probably fine; a documented example value |
+
+   Raise a Warning to Blocker if it is on the production start path and breaks the first request.
+
+3b. **Check the deploy path itself.** Confirm the Dockerfile or build script copies the files the app needs and does not copy secrets or `.env` files into the image. Confirm the start command matches what the app expects in production, and that each command it uses is declared in the manifest.
+
+4. **Find code that is never started.** For each route, job, or module that you flagged, check whether anything imports or starts it. What counts as an entry point, per stack:
+
+   | Stack | Entry point that starts the code |
+   |---|---|
+   | Python | A `__main__` block, a `manage.py` command, a route registered in a `urls.py` or `app.route` decorator, or a scheduler call |
+   | Java | A `main` method, a `@Scheduled` method, or a `scheduleAtFixedRate` call reached from `main` |
+   | Node.js | The `start` script in `package.json`, or a `require` chain from the file it names |
+   | IBM ESQL | A flow whose input node connects to the node in question (check the `.msgflow` wiring) |
+   | Front end | A `<script>` tag or a page that loads the file |
+
+   If nothing starts the code, mark it **unwired** and say what would start it. If something tries to start it but a piece is missing (for example, a URL config with no `urls.py`, or a `manage.py` that does not exist), mark it **unwired: missing piece** and name the missing file. Unwired code is not a production blocker by itself, but it can become one when someone wires it up.
 
 5. **Report.** Use a table sorted by severity. Add a separate list for anything you could not check, with the reason.
 

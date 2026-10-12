@@ -20,12 +20,12 @@ Run this before every push to a shared or public repo, before every deploy, and 
    | Secret type | Pattern to search |
    |---|---|
    | AWS access key | `AKIA[0-9A-Z]{16}`, `ASIA[0-9A-Z]{16}` |
-   | AWS secret | `aws_secret_access_key`, 40-character base64 next to an AWS key name |
+   | AWS secret | `(?i)aws_?secret[_a-z]*\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}\b` |
    | GitHub token | `ghp_[A-Za-z0-9]{36}`, `github_pat_`, `gho_`, `ghs_` |
    | Stripe | `sk_live_`, `rk_live_`, `whsec_` |
    | OpenAI | `sk-[A-Za-z0-9_-]{20,}`, `sk-proj-` |
    | Anthropic | `sk-ant-` |
-   | Google API (including Maps in HTML or JS) | `AIza[0-9A-Za-z_-]{30,}`. Near misses (`AIza` followed by 20 to 29 characters) are reported as Medium. |
+   | Google API (including Maps in HTML or JS) | `AIza[0-9A-Za-z_-]{30,}`. Near-miss pattern: `AIza[0-9A-Za-z_-]{20,29}\b`, reported as Medium. |
    | Slack | `xox[baprs]-` |
    | Private keys | `-----BEGIN ([A-Z]+ )?PRIVATE KEY-----` |
    | JWT | `eyJ[A-Za-z0-9_-]{10,}\.eyJ` |
@@ -35,7 +35,7 @@ Run this before every push to a shared or public repo, before every deploy, and 
 
    | Form | Example | Pattern idea |
    |---|---|---|
-   | Assignment with `=` or `:` | `SECRET_KEY = "..."`, `api_key: "..."`, `app.secret_key = "dev"`, `STRIPE_KEY = "..."`, `AWS_ACCESS_KEY = "..."` (values of 3+ characters count) | `[A-Za-z_]*(secret|password|passwd|token|api[_-]?key|_key)[A-Za-z_]*\s*[:=]\s*["'][^"']{3,}["']` |
+   | Assignment with `=` or `:`, quoted or bare key | `SECRET_KEY = "..."`, `api_key: "..."`, `app.secret_key = "dev"`, `STRIPE_KEY = "..."`, `"PASSWORD": "..."`, `'PASSWORD': '...'` (values of 3+ characters count) | `["']?[A-Za-z_]*(secret|password|passwd|token|api[_-]?key|_key)[A-Za-z_]*["']?\s*[:=]\s*["'][^"']{3,}["']` |
    | Dictionary or hash key | `'PASSWORD': 'hunter2'` (Django), `"password" => "..."` (PHP) | `["']?[A-Za-z_]*(secret|password|passwd|token|api[_-]?key|_key)[A-Za-z_]*["']?\s*[:=]?\s*["'][^"']{3,}["']` |
    | Space-separated declaration | `DECLARE dbPassword CHARACTER 'hunter2'` (ESQL), `SET x = 'hunter2'` | `(DECLARE|SET)\s+\S*(password|secret|token|key)\S*\s+(CHARACTER\s+)?'[^']{8,}'` |
    | Properties and env files (no quotes) | `OrderFlow#dbPassword=hunter2`, `db.password=hunter2`, `DB_PASSWORD=hunter2` | `(?i)[A-Za-z_.#]*(password|passwd|secret|token|api[_-]?key)[A-Za-z_.#]*\s*=\s*\S{8,}` |
@@ -45,10 +45,10 @@ Run this before every push to a shared or public repo, before every deploy, and 
 
    Also check the names of files: `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `id_rsa`, `credentials.json`, `service-account*.json`, `terraform.tfstate`, `*.sqlite` backups, `*.properties` files under `flow/`, `overrides/`, or `config/`.
 
-2. **Check whether secrets are ignored by git.** If the folder is not a git repository, say so, skip this step and step 3, and state in the report that history was not checked. Otherwise confirm `.gitignore` covers env files, key files, and keystores. Run `git ls-files` to see whether any such file is already tracked. A file that is ignored now but was committed earlier is still in history.
+2. **Check whether secrets are ignored by git.** If the folder is not a git repository, skip this step and step 3, and add this line to the report: "History not checked: not a git repository." Otherwise confirm `.gitignore` covers env files, key files, and keystores. Run `git ls-files` to see whether any such file is already tracked. A file that is ignored now but was committed earlier is still in history.
 
 3. **Check git history, without printing values.** Use commands that show commit IDs and file names only. Never run `git log -p`, because it prints the full secret.
-   - Commits that added or removed a matching value: `git log --all -G '<pattern>' --name-only --format='%h %s'`, using a pattern from step 1.
+   - Commits that added or removed a matching value. Use one regex from the "Known key formats" table as `<pattern>`. Example: `git log --all -G 'AKIA[0-9A-Z]{16}' --name-only --format='%h %s'`. To judge a historical value's shape, count matches with `git log --all -G '<pattern>' --oneline | wc -l`. Do not print the matching lines.
    - Deleted secret files: `git log --all --diff-filter=D --name-only --format='%h %s'`
    - Tracked-then-removed env or key files: `git log --all --name-only --format='%h %s' -- '*.env' '*.properties' '*.jks'`
 
@@ -60,7 +60,7 @@ Run this before every push to a shared or public repo, before every deploy, and 
    |---|---|---|
    | Client-side code | Secrets in HTML, CSS, or JS files; variables with public prefixes (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`) that hold a secret; `console.log` or `console.error` printing a secret; secrets in `<script>` tags | HTML, JS, React, Vue, Angular |
    | Logs | Logging, printing, or slicing a secret variable (`print(api_key)`, `System.out.println(password)`, `log.info(config)`, `STRIPE_KEY.slice(0, 8)`) | Python, Java, Node.js, ESQL (`LOG`, `PROPAGATE`), Django, Flask |
-   | Docker | `ENV` or `ARG` lines with secrets; `COPY . .` with no `.dockerignore` that would copy `.env` or key files into the image | Any Dockerfile |
+   | Docker | `ENV` or `ARG` lines with secrets; `COPY . .` with no `.dockerignore` that would copy `.env`, key files, or `.git` (with its full history) into the image | Any Dockerfile |
    | Java and Spring | Secrets in `application.properties`, `application.yml`, `pom.xml`, `build.gradle`, `*.jks`; `@Value("${...:secret}")` with a real default | Java, Spring |
    | Django | `SECRET_KEY`, `DATABASES` `PASSWORD`, `EMAIL_HOST_PASSWORD`, `AWS_SECRET_ACCESS_KEY` in `settings.py` | Django |
    | Flask | `app.secret_key = "..."`, `SQLALCHEMY_DATABASE_URI` with a password, `config.from_object` with secrets in the file | Flask |
@@ -69,7 +69,8 @@ Run this before every push to a shared or public repo, before every deploy, and 
    | Test fixtures and docs | Real keys pasted as examples. Example files should use placeholders. | Any |
 
 5. **Triage each hit before you rate it.**
-   - **Placeholder-shaped**: the value contains `FAKE`, `EXAMPLE`, `PLACEHOLDER`, `CHANGEME`, `XXXX`, or a run of zeros, even if it matches a live-key format. Rate it Medium and say "placeholder-shaped; confirm with the owner". If the owner says it is real, raise it to the right severity below.
+   - **Placeholder-shaped**: the value contains `FAKE`, `EXAMPLE`, `PLACEHOLDER`, `CHANGEME`, `XXXX`, or a run of zeros, even if it matches a live-key format. Rate it Medium by default, and say "placeholder-shaped; confirm with the owner". Escalate it (see the severity rules in step 6) if it has a live prefix (`sk_live_`, `AKIA`) AND it is in client code (HTML, CSS, JS) or in git history. Escalation applies even though it is a placeholder, because the exposure is the same.
+   - **Weak known passwords** (`hunter2`, `password`, `123456`, `admin`, `changeme`): Medium, even with no placeholder marker.
    - **Known documentation example** (such as the AWS docs key `AKIAIOSFODNN7EXAMPLE`): list it as "example, not a real key". Do not count it.
    - **Real-looking**: anything else that matches a credential pattern.
 
@@ -87,6 +88,12 @@ Run this before every push to a shared or public repo, before every deploy, and 
    - **High**: any other real-looking credential, including ones that exist only in git history.
    - **Medium**: placeholder-shaped values, near misses, or risky patterns with no confirmed value.
    - **Note**: documentation examples and placeholders that are clearly labeled.
+
+   **Escalation rules** (apply after the base severity above):
+   - A secret written to a log, a console, or a print statement: at least High, even if the value is a placeholder.
+   - A secret in client code that is reached by `eval()` or passed to it: at least High. A plain `eval()` with no secret involved is a parity finding, not a leak.
+   - A value that is in git history but not in the working tree: High, even if it is a placeholder, because it stays visible in the repo.
+   - Two or more hits for the same secret in different places: raise the severity by one level, and list every location.
 
 ## If a real secret is found
 
