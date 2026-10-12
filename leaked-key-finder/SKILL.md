@@ -41,6 +41,8 @@ Run this before every push to a shared or public repo, before every deploy, and 
    | Properties and env files (no quotes) | `OrderFlow#dbPassword=hunter2`, `db.password=hunter2`, `DB_PASSWORD=hunter2` | `(?i)[A-Za-z_.#]*(password|passwd|secret|token|api[_-]?key)[A-Za-z_.#]*\s*=\s*\S{8,}` |
    | Credentials in a URL query string | `jdbc:postgresql://host/db?user=app&password=hunter2` | `(?i)[?&](password|passwd|pwd|secret|token|api_?key)=[^&\s"']{6,}` |
 
+   **Live prefixes** that trigger escalation: `sk_live_`, `rk_live_`, `AKIA`, `ASIA`, `AIza`, `xox`, `ghp_`, `github_pat_`. A Google `AIza` key counts the same as the others.
+
    The `_key` suffix is noisy (`cache_key`, `sort_key`). Triage each hit: a hit is a finding only if the value looks like a credential.
 
    Also check the names of files: `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `id_rsa`, `credentials.json`, `service-account*.json`, `terraform.tfstate`, `*.sqlite` backups, `*.properties` files under `flow/`, `overrides/`, or `config/`.
@@ -60,7 +62,7 @@ Run this before every push to a shared or public repo, before every deploy, and 
    |---|---|---|
    | Client-side code | Secrets in HTML, CSS, or JS files; variables with public prefixes (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `PUBLIC_`, `EXPO_PUBLIC_`) that hold a secret; `console.log` or `console.error` printing a secret; secrets in `<script>` tags | HTML, JS, React, Vue, Angular |
    | Logs | Logging, printing, or slicing a secret variable (`print(api_key)`, `System.out.println(password)`, `log.info(config)`, `STRIPE_KEY.slice(0, 8)`) | Python, Java, Node.js, ESQL (`LOG`, `PROPAGATE`), Django, Flask |
-   | Docker | `ENV` or `ARG` lines with secrets; `COPY . .` with no `.dockerignore` that would copy `.env`, key files, or `.git` (with its full history) into the image | Any Dockerfile |
+   | Docker | `ENV` or `ARG` lines with secrets; `COPY . .` with no `.dockerignore` that would copy `.env`, key files, or `.git` (with its full history) into the image. Report only if such a file or history secret exists: High if `.git` holds a real-looking secret, otherwise a Note. | Any Dockerfile |
    | Java and Spring | Secrets in `application.properties`, `application.yml`, `pom.xml`, `build.gradle`, `*.jks`; `@Value("${...:secret}")` with a real default | Java, Spring |
    | Django | `SECRET_KEY`, `DATABASES` `PASSWORD`, `EMAIL_HOST_PASSWORD`, `AWS_SECRET_ACCESS_KEY` in `settings.py` | Django |
    | Flask | `app.secret_key = "..."`, `SQLALCHEMY_DATABASE_URI` with a password, `config.from_object` with secrets in the file | Flask |
@@ -69,7 +71,7 @@ Run this before every push to a shared or public repo, before every deploy, and 
    | Test fixtures and docs | Real keys pasted as examples. Example files should use placeholders. | Any |
 
 5. **Triage each hit before you rate it.**
-   - **Placeholder-shaped**: the value contains `FAKE`, `EXAMPLE`, `PLACEHOLDER`, `CHANGEME`, `XXXX`, or a run of zeros, even if it matches a live-key format. Rate it Medium by default, and say "placeholder-shaped; confirm with the owner". Escalate it (see the severity rules in step 6) if it has a live prefix (`sk_live_`, `AKIA`) AND it is in client code (HTML, CSS, JS) or in git history. Escalation applies even though it is a placeholder, because the exposure is the same.
+   - **Placeholder-shaped**: the value contains `FAKE`, `EXAMPLE`, `PLACEHOLDER`, `CHANGEME`, `XXXX`, or a run of zeros, even if it matches a live-key format. Rate it Medium by default, and say "placeholder-shaped; confirm with the owner". Escalate it (see the severity rules in step 6) if it has a live prefix (`sk_live_`, `AKIA`) AND it is in client code (HTML, CSS, JS) or in git history. Escalation applies even though it is a placeholder, because the exposure is the same. Critical is reserved for values with a live prefix, no placeholder marker, and a location in client code or the production path. A placeholder never becomes Critical by itself.
    - **Weak known passwords** (`hunter2`, `password`, `123456`, `admin`, `changeme`): Medium, even with no placeholder marker.
    - **Known documentation example** (such as the AWS docs key `AKIAIOSFODNN7EXAMPLE`): list it as "example, not a real key". Do not count it.
    - **Real-looking**: anything else that matches a credential pattern.
@@ -93,7 +95,7 @@ Run this before every push to a shared or public repo, before every deploy, and 
    - A secret written to a log, a console, or a print statement: at least High, even if the value is a placeholder.
    - A secret in client code that is reached by `eval()` or passed to it: at least High. A plain `eval()` with no secret involved is a parity finding, not a leak.
    - A value that is in git history but not in the working tree: High, even if it is a placeholder, because it stays visible in the repo.
-   - Two or more hits for the same secret in different places: raise the severity by one level, and list every location.
+   - Two or more hits for the same secret in different places: raise the severity by one level, and list every location. "Same secret" means the same full value, or the same last 8 characters when the value is partly redacted. "Reached by eval" means the secret variable is an argument to `eval()`, or to a function that passes its argument to `eval()`.
 
 ## If a real secret is found
 
@@ -108,4 +110,5 @@ Run this before every push to a shared or public repo, before every deploy, and 
 - Do not print full secret values, in chat or in files you write.
 - Do not commit, push, rotate, or rewrite history without the user's approval.
 - If nothing is found, say which patterns, groups, and paths were checked, and whether history was checked, so the result can be trusted.
+- Scanning several projects: run steps 1 to 6 for each project folder separately, label every finding with its project, and never give a secret a severity based on another project's context.
 - Hardcoded secrets in deploy config (for example a Dockerfile `ENV` line) are a leak finding here. Parity issues around the same line belong to `prod-parity-check`.

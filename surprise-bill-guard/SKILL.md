@@ -26,7 +26,7 @@ Run before every deploy, and after any change that adds an external API call, a 
 
    **A stub is not a paid call.** A function is a stub when its body returns fixed data and makes no network call. Say so, and note what it will become. If you cannot tell whether a call is real or a stub, label it **unclear** and say what is missing (for example, "the client module is not in the project").
 
-   **A placeholder endpoint is not a live paid call.** A call whose host ends in `.example`, `.test`, or `example.com`, or that points at `localhost`, is a placeholder. Label it **unclear** and note the placeholder. Do not count it as current.
+   **A placeholder endpoint is scored as live.** A call whose host ends in `.example`, `.test`, or `example.com`, or that points at `localhost`, is a placeholder. Score its severity as if the host were live, because the project may ship with it, and label the report row "placeholder host". Wiring still decides Current or Latent.
 
    **A real call** uses a provider SDK, or an HTTP client aimed at a provider host, or reads a provider key from the environment.
 
@@ -40,7 +40,7 @@ Run before every deploy, and after any change that adds an external API call, a 
    | Missing cache | Same expensive call repeated for the same input | All |
    | Retries without limits | Retry loops with no max attempts, no backoff, or retries on every error including client errors. Search: `retry`, `catch` followed by a loop, `except` followed by a loop | All |
    | Browser polling | Front-end code that calls a paid API on a timer or on every keypress with no debounce | HTML, JS, React, Vue, Angular |
-   | Exposed keys in browser code | A paid API key that ships to the browser lets anyone spend the account's money. Report it here as a cost risk and refer it to `leaked-key-finder`. | HTML, JS |
+   | Exposed keys in browser code | A paid API key that ships to the browser lets anyone spend the account's money. Report it here as a High, Current cost exposure (a live-prefix key in browser code, whatever the call volume), and refer it to `leaked-key-finder`. | HTML, JS |
    | Expensive defaults | Large model, high `max_tokens`, high resolution, or long context used by default; no cap on output length | All |
    | Public, unauthenticated endpoints | Route handlers that call a paid service with no login, no rate limit, and no quota. Search: `@app.route` (Flask), `@app.get`, `@app.post`, `@RequestMapping`, `@GetMapping`, `@PostMapping`, `path(` in Django `urls.py`, `router.` (Express), `Route::` (Laravel) | Flask, Django, Spring, Express |
    | Unpaginated queries | Fetching all rows (`.objects.all()`, `findAll()`, `SELECT *` with no `LIMIT`), or scanning whole buckets, on each request or each run | Django, Java, Node.js, ESQL |
@@ -63,7 +63,7 @@ Run before every deploy, and after any change that adds an external API call, a 
      | IBM ESQL | A flow whose input node connects to the node in question (check the `.msgflow` wiring) |
      | Front end | A `<script>` tag or a page that loads the file |
    - **Latent**: nothing in the project starts it. Say what would start it.
-   - **Unclear**: the wiring is missing from the project (for example, a view with no `urls.py`, or a job with no scheduler). Say which file is missing.
+   - **Unclear**: the wiring is missing from the project (for example, a view with no `urls.py`, or a job with no scheduler). Say which file is missing. A wired project that cannot start (a missing dependency such as `flask-cors`, no `manage.py`, a jar that cannot be built) is also Unclear; name the missing piece.
 
 4. **Estimate the exposure.** Always compute the call volume, because it does not need a price. For each risky call:
 
@@ -82,7 +82,8 @@ Run before every deploy, and after any change that adds an external API call, a 
    **Severity scale** (use it so the same project ranks the same way every time):
    - **High**: current, and either unbounded, or more than 100,000 calls per month at the upper default volume.
    - **Medium**: current, bounded, and more than 10,000 calls per month at the upper default volume.
-   - **Low**: current and under 10,000 calls per month at the upper default volume; or latent; or unclear.
+   - **Low**: current and under 10,000 calls per month at the upper default volume; or latent; or unclear and bounded.
+   - An unclear item with no volume bound is at least Medium.
    - Raise a Latent item to High only if the report says the project wires it up (for example, a route is added or a scheduler is registered).
 
    | Risk | Status | Location | Trigger | Calls per day | Calls per month | Monthly cost | Fix |
@@ -107,4 +108,5 @@ Run before every deploy, and after any change that adds an external API call, a 
 - Do not change billing settings, spending caps, or account limits. Those are the user's to set.
 - If the code makes no paid calls and has no scaling config, say so clearly. That is a valid result.
 - Do not count a stub as a paid call. Say that it is a stub and note what it will become.
+- A real-looking live secret on the server with no paid call is not a cost risk. Note it and refer it to `leaked-key-finder`.
 - Do not look up prices online unless the user asks. Use prices the user provides or a price list that is in the project.

@@ -17,7 +17,7 @@ Run before every deploy or release. It is most useful after the AI added new con
 
    If there is no manifest at all (no `package.json`, `requirements.txt`, `pom.xml`, `build.gradle`, or equivalent), say so and check only what the code itself shows.
 
-   If there is no deploy config at all, assume these production defaults and list each one in the report: the Dockerfile `CMD` if one exists; otherwise the `Procfile`; otherwise one process that listens on the `PORT` variable. Then run the checks against those assumptions.
+   If there is no deploy config at all, assume these production defaults and list each one in the report: the Dockerfile `CMD` if one exists; otherwise the `Procfile`; otherwise one process that listens on the `PORT` variable. Then run the checks against those assumptions. The assumptions themselves create no findings. A check that fails only because of an assumption is a Note, not a Blocker.
 
 2. **Run the checks below.** Use search tools (grep or ripgrep) across the whole repo. Skip `node_modules`, `vendor`, `target`, `build`, `dist`, virtualenvs, and build output.
 
@@ -68,13 +68,14 @@ Run before every deploy or release. It is most useful after the AI added new con
    | Java (JDBC) | Connection string | `jdbc:...://localhost` or a password in the query string (`?password=`) |
    | Node.js | Dev command | `npm run dev`, `nodemon`, `ts-node` in production `CMD`; `NODE_ENV=development` |
    | Front end (HTML, CSS, JS) | Client build | Dev server or unminified bundles deployed; `http://localhost` URLs in HTML, CSS (`url(...)`), or JS; `console.log` of user data or secrets; `eval(` on untrusted input; source maps published with secrets inside; `https` page loading `http` scripts or styles |
-   | IBM ESQL and App Connect | Deployment config | Broker or integration server properties pointing at a local MQ queue manager or database (`localhost`, `127.0.0.1`); flow properties with dev default values in `*.properties` override files; `DECLARE` with a dev URL instead of a property; missing overrides for production environment. **Override binding:** an override line such as `OrderFlow#geoUrl=...` applies only if the name after `#` matches a property the flow declares. An override that binds to nothing is a Warning ("override binds to nothing"), because production silently keeps the default. |
+   | IBM ESQL and App Connect | Deployment config | Broker or integration server properties pointing at a local MQ queue manager or database (`localhost`, `127.0.0.1`); flow properties with dev default values in `*.properties` override files; `DECLARE` with a dev URL instead of a property; missing overrides for production environment. **Override binding:** an override line such as `OrderFlow#geoUrl=...` applies only if the name after `#` matches a property the flow declares. An override that binds to nothing is a Warning ("override binds to nothing"), because production silently keeps the default. A declared property is a name set by `DECLARE` or `SET` in the module's `.esql` file, or defined in the `.msgflow` file for that node. |
    | Serverless or PaaS | Fixed runtime | Writes to the local disk; long-running background threads or loops that the platform will kill; no `PORT` read |
 
    **D. Cross-references (do not repeat these here)**
    - Hardcoded secrets, keys, passwords, and secrets written to logs: run `leaked-key-finder`.
    - Loops, timers, retries, and public endpoints that call paid services: run `surprise-bill-guard`.
    - Failing unit tests: run `prove-it-works`.
+   - Secrets in git history (committed, then removed): run `leaked-key-finder` step 3.
    - If a referred skill is not loaded in this environment, report "Cannot check: skill not loaded" against that item. Do not silently refer it.
 
 3. **Assign a severity to every finding.** Use these defaults, so the same project gets the same ranking every time.
@@ -83,9 +84,14 @@ Run before every deploy or release. It is most useful after the AI added new con
    |---|---|
    | Blocker | Hardcoded production-breaking address (`localhost` DB or listen); `DEBUG` on in production; dev command in the production `CMD`; missing `WORKDIR` or dependency install in the Dockerfile; a `CMD` target that the image does not contain; a required env var read with no default; a live secret in client code (also refer to `leaked-key-finder`) |
    | Warning | Missing `.dockerignore` or `.gitignore` coverage; no lockfile; unpinned dependencies; `eval()` on input; CORS `*`; outbound calls with no timeout; third-party scripts with no `integrity`; mixed content; port or `EXPOSE` mismatch; override that binds to nothing |
+   | Warning | Local file writes; hardcoded path separators; a `SECRET_KEY` literal (refer the secret to `leaked-key-finder`) |
    | Note | Floating image tags; unwired code (with the missing piece named); a default assumption that is probably fine; a documented example value |
 
    Raise a Warning to Blocker if it is on the production start path and breaks the first request.
+
+   **Unwired code** is a Note for parity purposes, even if it contains an unbounded loop. Its cost risk is reported by `surprise-bill-guard`, not here.
+
+   **No dependencies declared:** the lockfile and `.dockerignore` checks do not apply. Record each as a Note: "not applicable: no dependencies".
 
 3b. **Check the deploy path itself.** Confirm the Dockerfile or build script copies the files the app needs and does not copy secrets or `.env` files into the image. Confirm the start command matches what the app expects in production, and that each command it uses is declared in the manifest.
 

@@ -16,7 +16,7 @@ Run this after every AI task, before you accept the result, merge, or move on.
 1. **Write the claims down.** Restate what the AI said it did as a short list of checkable claims. Take the claims from, in order:
    - The user's request, if it names outcomes.
    - The AI's final message, if there is one.
-   - If neither exists, the changed code and commit messages. Code comments and test names describe intent; they do not prove it, so they are not claims. Say that the claims were inferred, and list them.
+   - If neither exists, the changed code and commit messages. Code comments and test names describe intent; they do not prove it, so they are not claims, with one exception: a comment that names a specific, checkable result (for example, "10% off 100 returns 90") is a claim, marked "from comment". Commit messages are claims only when they name an outcome. Say that the claims were inferred, and list them.
 
    Never invent a claim that nothing supports. If you cannot find any claim, say so, run the project's own checks in step 2, and report "no claims to verify" with the list of files reviewed.
 
@@ -40,12 +40,13 @@ Run this after every AI task, before you accept the result, merge, or move on.
 
    **Runner notes:**
    - **Tool missing vs project cannot build:** a missing tool is NOT VERIFIED. A project that cannot build with its own declared tools (a test imports a library its manifest does not declare, or a file it needs is absent) is FAILED, with the reason. Zero tests run is NOT VERIFIED, and it is a finding in its own right.
+   - **Static evidence:** a project that cannot work for a reason visible in its files (a file it needs is missing, a test import its manifest does not declare, a missing `manage.py`) is FAILED (static), with the file and line, without running anything. Static FAILED wins over tool missing, because it does not need the tool.
    - **Node.js on Node 24 (and on Windows):** `node --test <directory>` can fail with `MODULE_NOT_FOUND` before any assertion runs. Pass explicit test file paths instead (for example `node --test test/pricing.test.js`). Report a runner error as NOT VERIFIED.
    - **Python unittest:** if it reports `NO TESTS RAN` for pytest-style functions, the tests were not run. Report NOT VERIFIED. Install pytest and say so, or call the test functions directly and say that you did.
 
 3. **Reproduce the original problem (for bug fixes).** Before the fix, the bug must be reproducible. After the fix, the same steps must succeed. If you cannot reproduce it before the change, you cannot prove the change fixed it. If there is no change set (a whole-project review), write "not applicable: no change set" and continue with step 4.
 
-4. **Exercise the changed behavior end to end.**
+4. **Exercise the changed behavior end to end.** A walkthrough means reading the code path. Run it only if step 6 says it is safe.
    - Library or function: call it with a normal input and at least one edge or failure input.
    - Web API (Flask, Django, Spring, Express, and similar): start it and send a real request. Check status code and response body.
    - CLI: run the command with real arguments and check the output and exit code.
@@ -56,7 +57,7 @@ Run this after every AI task, before you accept the result, merge, or move on.
 5. **Run the test command with a timeout, and read it carefully.**
    - Put a timeout on every test or server command. A hang is FAILED, with the reason "did not exit within N seconds". A test that starts a server must close it, or the runner will wait forever. Decide a hang by where it stopped: if the tests finished and the process did not exit, it is FAILED (hang). If the runner stopped before any test ran, it is NOT VERIFIED (runner error).
    - Tell runner errors apart from test failures. A `MODULE_NOT_FOUND`, a compile error, or a missing environment variable means the tests never ran. Report that as NOT VERIFIED, not as a passed or failed assertion.
-   - If a required environment variable is missing, look for `.env.example`, the README, or the CI config for the documented values before running. Do not let an import-time crash hide the real result.
+   - If a required environment variable is missing, look for `.env.example`, the README, or the CI config for the documented values before running. If the documented values are placeholders, use them. If no value is documented, mark the run NOT VERIFIED (missing environment value) and do not invent one. Do not let an import-time crash hide the real result.
    - **Ports:** check that the port is free before you start a server. If it is taken by a process you did not start, do not stop it. Use another port through the app's `PORT` setting, or report NOT VERIFIED with the reason. If the app hardcodes its port (for example `listen(3000)`) and that port is taken, report NOT VERIFIED. Do not edit the project's port to get around it.
    - Stop any server or process you started during verification.
 
