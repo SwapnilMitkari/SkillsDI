@@ -13,7 +13,14 @@ Run this after every AI task, before you accept the result, merge, or move on.
 
 ## Steps
 
-1. **Write the claims down.** Restate what the AI said it did as a short list of checkable claims. Example: "Login now rejects an expired token," "the CSV export includes the date column," "the build passes."
+1. **Write the claims down.** Restate what the AI said it did as a short list of checkable claims. Take the claims from, in order:
+   - The user's request, if it names outcomes.
+   - The AI's final message, if there is one.
+   - If neither exists, the changed code, test names, and commit messages. Say that the claims were inferred, and list them.
+
+   Never invent a claim that nothing supports. If you cannot find any claim, say so and stop at step 2 with a list of what the change touched.
+
+   Example claims: "Login now rejects an expired token," "the CSV export includes the date column," "the build passes."
 
 2. **Detect the stack and its test runner.** Find the project's manifests and pick the matching row. Run the project's own commands. Do not install tools silently.
 
@@ -26,10 +33,14 @@ Run this after every AI task, before you accept the result, merge, or move on.
    | Java (Maven) | `pom.xml` | `mvn -q test` (or `./mvnw -q test`) | Report NOT VERIFIED if `mvn` is missing |
    | Java (Gradle) | `build.gradle`, `build.gradle.kts`, `settings.gradle` | `./gradlew test` (or `gradle test`) | Report NOT VERIFIED if neither is available |
    | IBM ESQL (App Connect / IIB) | `*.esql`, `*.msgflow`, `*.subflow`, `*.application`, `*.bar` | The project's unit-test project, run with the IBM toolkit's build or `ibmint`/`mqsi` tools | This usually needs the IBM toolkit installed. Without it, report NOT VERIFIED. Never mark ESQL as passed by reading it. |
-   | Front end (HTML, CSS, JS) | `package.json`, `.stylelintrc*`, `.eslintrc*`, `eslint.config.*`, `.htmlvalidate*` | `npm run lint`, `npx stylelint "**/*.css"`, `npx eslint .`, `npx html-validate "**/*.html"` if configured | With no lint or test config, report "no automated checks" as a finding and check manually |
+   | Front end (HTML, CSS, JS) | `package.json`, `.stylelintrc*`, `.eslintrc*`, `eslint.config.*`, `.htmlvalidate*` | `npm run lint`, `npx stylelint "**/*.css"`, `npx eslint .`, `npx html-validate "**/*.html"` if configured | With no lint or test config, report "no automated checks" as a finding. Review the changed files by hand, list each manual check you made and its limits, and mark any automated claim NOT VERIFIED |
    | Other | Makefile, justfile, Taskfile, CI config (`.github/workflows/`, `.gitlab-ci.yml`) | Use the target the CI runs | If nothing is found, say so. That is a finding, not a pass. |
 
    Also check CI config (`.github/workflows/`, `.gitlab-ci.yml`, `azure-pipelines.yml`, `.circleci/`) for the exact commands the project uses.
+
+   **Runner notes:**
+   - **Node.js on Node 24 (and on Windows):** `node --test <directory>` can fail with `MODULE_NOT_FOUND` before any assertion runs. Pass explicit test file paths instead (for example `node --test test/pricing.test.js`). Report a runner error as NOT VERIFIED.
+   - **Python unittest:** if it reports `NO TESTS RAN` for pytest-style functions, the tests were not run. Report NOT VERIFIED. Install pytest and say so, or call the test functions directly and say that you did.
 
 3. **Reproduce the original problem (for bug fixes).** Before the fix, the bug must be reproducible. After the fix, the same steps must succeed. If you cannot reproduce it before the change, you cannot prove the change fixed it.
 
@@ -42,12 +53,18 @@ Run this after every AI task, before you accept the result, merge, or move on.
    - Data or scripts: run on a small sample and inspect the output file.
 
 5. **Run the test command with a timeout, and read it carefully.**
-   - Put a timeout on every test or server command. A hang is FAILED, with the reason "did not exit within N seconds".
+   - Put a timeout on every test or server command. A hang is FAILED, with the reason "did not exit within N seconds". A test that starts a server must close it, or the runner will wait forever.
    - Tell runner errors apart from test failures. A `MODULE_NOT_FOUND`, a compile error, or a missing environment variable means the tests never ran. Report that as NOT VERIFIED, not as a passed or failed assertion.
    - If a required environment variable is missing, look for `.env.example`, the README, or the CI config for the documented values before running. Do not let an import-time crash hide the real result.
-   - Stop any server or process you started during verification. Check that the port is free before starting one.
+   - **Ports:** check that the port is free before you start a server. If it is taken by a process you did not start, do not stop it. Use another port through the app's `PORT` setting, or report NOT VERIFIED with the reason.
+   - Stop any server or process you started during verification.
 
-6. **Scan for tests that cannot fail.** Search the test files for vacuous assertions and skipped tests:
+6. **Check whether running is safe.** Before you run code, check whether it calls external services, sends messages, charges money, or loops over paid calls.
+   - If it does, do not run it against live services. Use test-mode keys or stubs only if the user provided them. Otherwise report NOT VERIFIED with the reason "skipped: would call an external service".
+   - Never run a loop that makes paid calls to see what happens.
+   - Browser pages that call paid APIs are checked by reading the code, not by running them.
+
+7. **Scan for tests that cannot fail.** Search the test files for vacuous assertions and skipped tests:
    - Python: `assert True`, `self.assertTrue(True)`, `@pytest.mark.skip`, `@unittest.skip`
    - Java: `assertTrue(true)`, `@Disabled`, `@Ignore`
    - Node.js and front end: `assert.ok(true)`, `expect(true)`, `it.skip`, `test.skip`, `xit(`
@@ -56,9 +73,11 @@ Run this after every AI task, before you accept the result, merge, or move on.
 
    Report each one. A test that cannot fail does not prove anything.
 
-7. **Check for silent regressions.** Re-run the tests that were green before the change. Read the diff for code that was deleted, commented out, or wrapped in a broad `try/catch`, `except`, `catch (Exception e)`, or `ON ERROR` handler (ESQL) that swallows errors.
+8. **Check for silent regressions.** Re-run the tests that were green before the change. Read the diff for code that was deleted, commented out, or wrapped in a broad `try/catch`, `except`, `catch (Exception e)`, or `ON ERROR` handler (ESQL) that swallows errors.
 
-8. **Report with a verdict per claim.**
+   **Baseline:** if there is no record of which tests passed before the change, say "no baseline". Where possible, run the suite once before the change to record one.
+
+9. **Report with a verdict per claim.**
 
    | Claim | Verdict | Evidence |
    |---|---|---|
@@ -66,13 +85,17 @@ Run this after every AI task, before you accept the result, merge, or move on.
    | Build passes | VERIFIED | `npm run build` exit 0 |
    | CSV includes date column | NOT VERIFIED | Did not run the export; need sample data |
    | ESQL flow routes errors to the fault terminal | NOT VERIFIED | IBM toolkit not installed; no runner available |
+   | Discount is 10% off 100 | FAILED | `node --test test/pricing.test.js`: actual 91, expected 90 |
 
-   Verdicts: **VERIFIED** (you ran it and saw the result), **FAILED** (ran it and it broke), **NOT VERIFIED** (could not check, and say why).
+   Verdicts: **VERIFIED** (you ran it and saw the result), **FAILED** (ran it and it broke, including a hang), **NOT VERIFIED** (could not check, and say why).
+
+   Also list the claims source (step 1), the baseline status (step 8), and any port or safety skips (steps 5 and 6).
 
 ## Rules
 
 - Do not accept "should work", "looks correct", or "I updated the code" as evidence.
 - Do not edit or delete tests to make them pass. If a test is wrong, say so and ask.
 - A file that cannot be run (no runner, no toolkit) is never PASS. Report NOT VERIFIED with the reason.
+- Do not stop a process you did not start, even if it blocks a port.
 - Show the command you ran and the relevant output. Keep excerpts short.
 - If anything FAILED, the task is not done. Fix it or report it first.

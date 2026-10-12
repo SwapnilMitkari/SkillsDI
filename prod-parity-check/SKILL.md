@@ -15,6 +15,8 @@ Run before every deploy or release. It is most useful after the AI added new con
 
 1. **Identify the target environment.** Find how the app is deployed: Dockerfiles, `docker-compose*.yml`, Kubernetes manifests (`k8s/`, `helm/`), `serverless.yml`, `vercel.json`, `netlify.toml`, `fly.toml`, `render.yaml`, `Procfile`, `app.yaml`, Terraform (`*.tf`), CI deploy jobs, platform config, and for ESQL the BAR file or integration server deployment scripts. Note what runs in production: which command starts the app, which OS image, which port.
 
+   If there is no manifest at all (no `package.json`, `requirements.txt`, `pom.xml`, `build.gradle`, or equivalent), say so and check only what the code itself shows.
+
 2. **Run the checks below.** Use search tools (grep or ripgrep) across the whole repo. Skip `node_modules`, `vendor`, `target`, `build`, `dist`, virtualenvs, and build output.
 
    **A. Checks for every stack**
@@ -29,7 +31,9 @@ Run before every deploy or release. It is most useful after the AI added new con
    | Migrations | Schema changes with no migration file, or migrations not run by the deploy step | App errors on missing columns |
    | Lockfiles | Dependency manifest changed but lockfile not updated; no lockfile at all (`package-lock.json`, `yarn.lock`, `poetry.lock`, `Pipfile.lock`, `go.sum`, `Cargo.lock`, `gradle.lockfile`) | Different versions in production |
    | Declared dependencies | Every import must be declared in the manifest (`requirements.txt`, `pyproject.toml`, `package.json`, `pom.xml`, `build.gradle`). Every command the deploy runs (for example `nodemon`, `gunicorn`) must be declared too | Works locally because the package is installed by hand, fails in the container |
-   | Unpinned versions | `flask` or `requests` with no version in `requirements.txt`; `latest` tags in Dockerfiles | Builds change without any code change |
+   | Unpinned versions | `flask` or `requests` with no version in `requirements.txt`; `latest` tags in Dockerfiles. Floating tags such as `node:20` or `python:3.12` are a Note: they pick up patch releases, which is usually acceptable but should be a deliberate choice. | Builds change without any code change |
+   | Outbound calls without timeout | HTTP or database calls with no timeout set (`requests.post(url)` with no `timeout=`, `fetch` with no abort, a client with no connect or read timeout) | A slow upstream hangs workers until the platform kills them |
+   | Third-party scripts and styles | `<script src>` or `<link href>` loading from another origin with no `integrity` attribute | A changed or compromised CDN file runs on your page |
    | Case-sensitive paths | Imports or file names whose case does not match on disk | Works on Windows or macOS, fails on Linux |
    | OS-specific code | Hardcoded `\` path separators, `C:\` paths, shell commands that exist only on one OS | Fails on Linux containers |
    | CORS and origins | Allowed origins set to `*` (`origins="*"`, `CORS_ALLOW_ALL_ORIGINS = True`, `Access-Control-Allow-Origin: *`, `@CrossOrigin(origins = "*")`) | Browser requests fail, or are open to any site |
@@ -40,12 +44,21 @@ Run before every deploy or release. It is most useful after the AI added new con
    | Third-party sandboxes | Test keys, sandbox URLs, or test webhook secrets in production config | Payments or emails go nowhere |
    | `.dockerignore` | `COPY . .` with no `.dockerignore` that excludes `.env`, `.git`, key files, and local data | Secrets and local data end up in the image |
 
-   **B. Stack-specific checks**
+   **B. Container build path (for any Dockerfile)**
+
+   | Check | What to look for | Why it breaks |
+   |---|---|---|
+   | Working directory | `COPY` or `CMD` uses relative paths (`app.py`, `target/app.jar`, `manage.py`) but there is no `WORKDIR` line | The start command runs from `/` and cannot find the files |
+   | Install step | The image never installs from the manifest (no `pip install -r`, `npm ci` or `npm install`, `mvn package`, `gradle build`, or equivalent) | Imports fail at startup |
+   | Start target exists | Every file or artifact named in `CMD` or `ENTRYPOINT` is produced or copied into the image (for example `target/app.jar` is never built in the Dockerfile, or `manage.py` is missing from the project) | The container exits on start |
+   | Base image | `latest` tags, or an image whose runtime version differs from the one the code was written for | Builds change without a code change |
+
+   **C. Stack-specific checks**
 
    | Stack | Check | What to look for |
    |---|---|---|
    | Python (general) | Debug and runtime mode | `DEBUG = True`, `debug=True`, `FLASK_DEBUG=1`, `FLASK_ENV=development` |
-   | Django | Settings for production | `DEBUG = True`; `ALLOWED_HOSTS = ['*']` or missing; `CORS_ALLOW_ALL_ORIGINS = True`; `SECRET_KEY` read from code instead of env; `STATIC_ROOT` missing before `collectstatic`; `MEDIA_ROOT` inside the project folder; `manage.py runserver` in the Dockerfile or `Procfile` (use gunicorn or uwsgi) |
+   | Django | Settings for production | `DEBUG = True`; `ALLOWED_HOSTS = ['*']` or missing; `CORS_ALLOW_ALL_ORIGINS = True`; `SECRET_KEY` read from code instead of env; `STATIC_ROOT` missing before `collectstatic`; `MEDIA_ROOT` inside the project folder; `manage.py runserver` in the Dockerfile or `Procfile` (use gunicorn or uwsgi); no `urls.py` that routes to the views |
    | Flask | Server and config | `app.run(debug=True)` or `app.run(host="127.0.0.1")`; `app.secret_key = "..."` as a literal; `flask run` or `python app.py` as the production command (use gunicorn or waitress); `CORS(app, origins="*")` |
    | Java (Spring, Maven, Gradle) | Profile and config | `SPRING_PROFILES_ACTIVE=dev` or `spring.profiles.active=dev` in production; `application.properties` or `application.yml` with localhost URLs; `server.port` fixed; `System.getenv` with no default; `JAVA_TOOL_OPTIONS` debug flags (`-agentlib:jdwp`); Dockerfile `CMD` with `mvn spring-boot:run` (use the built jar) |
    | Java (JDBC) | Connection string | `jdbc:...://localhost` or a password in the query string (`?password=`) |
@@ -54,20 +67,29 @@ Run before every deploy or release. It is most useful after the AI added new con
    | IBM ESQL and App Connect | Deployment config | Broker or integration server properties pointing at a local MQ queue manager or database (`localhost`, `127.0.0.1`); flow properties with dev default values in `*.properties` override files; `DECLARE` with a dev URL instead of a property; missing overrides for production environment |
    | Serverless or PaaS | Fixed runtime | Writes to the local disk; long-running background threads or loops that the platform will kill; no `PORT` read |
 
-3. **Check the deploy path itself.** Confirm the Dockerfile or build script copies the files the app needs and does not copy secrets or `.env` files into the image. Confirm the start command matches what the app expects in production. Check that each command the start line uses is declared in the manifest.
+   **D. Cross-references (do not repeat these here)**
+   - Hardcoded secrets, keys, and passwords: run `leaked-key-finder`.
+   - Loops, timers, retries, and public endpoints that call paid services: run `surprise-bill-guard`. Note in your report that they were referred there.
 
-4. **Report.** Use a table sorted by severity:
+3. **Check the deploy path itself.** Confirm the Dockerfile or build script copies the files the app needs and does not copy secrets or `.env` files into the image. Confirm the start command matches what the app expects in production, and that each command it uses is declared in the manifest.
+
+4. **Find code that is never started.** For each route, job, or module that you flagged, check whether anything imports or starts it (an entry point, a URL config, a scheduler registration, a `main`). If nothing does, mark it **unwired** and say what would start it. Unwired code is not a production blocker by itself, but it can become one when someone wires it up.
+
+5. **Report.** Use a table sorted by severity. Add a separate list for anything you could not check, with the reason.
 
    | Severity | Location | Problem | Fix |
    |---|---|---|---|
    | Blocker | `config/db.js:12` | Database URL hardcoded to `localhost` | Read from `DATABASE_URL` env var |
    | Blocker | `settings.py:2` | `DEBUG = True` in the production settings | Read from env with a default of `False` |
+   | Blocker | `Dockerfile:4` | `CMD ["java", "-jar", "target/app.jar"]` with no `WORKDIR` and no build step that creates `target/app.jar` | Add `WORKDIR` and a build stage |
    | Warning | `Dockerfile:8` | Runs `npm run dev` | Use `npm start` after `npm run build` |
    | Warning | `requirements.txt` | `requests` imported but not listed | Add it, with a pinned version |
+   | Note | `shop/views.py:12` | View is never routed (no `urls.py`) | Unwired; add a URL config or remove the view |
 
-   - **Blocker**: production will fail or leak data. Do not deploy.
+   - **Blocker**: production will fail to start or run, leak data, or run up unbounded cost. Do not deploy.
    - **Warning**: likely a problem or a risk. Fix before or right after deploy.
-   - **Note**: a difference that is probably fine. State why.
+   - **Note**: probably fine, or unwired code. State why, and say what would start it.
+   - **Cannot check**: a check that needs a tool, a running service, or a file the project does not have. Give the reason.
 
 ## Rules
 
@@ -75,3 +97,4 @@ Run before every deploy or release. It is most useful after the AI added new con
 - Do not change production config without asking. Propose the diff.
 - If no deploy config exists, say so, and list the assumptions you made about the production environment.
 - If a stack is not listed above, apply section A and check its own production-mode settings (the framework's documentation names them).
+- Do not run the project to check it. This skill is read-only analysis.
